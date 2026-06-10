@@ -64,13 +64,12 @@ jobs:
                       break
 
           if not trigger_id:
-              print(f"No new trigger (last_id={last_id}). Scheduling next poll...")
-              # Self-trigger after ~55 seconds
+              print(f"No new trigger (last_id={last_id}). Sleeping 55s then chaining...")
               time.sleep(55)
               gh_api("POST", f"repos/{repo}/dispatches", {"event_type": "next-poll"})
               sys.exit(0)
 
-          # Save processed ID
+          # Save processed ID FIRST to prevent double-trigger
           var_path = f"repos/{repo}/actions/variables/LAST_PROCESSED_ID"
           gh_api("PATCH", var_path, {"name": "LAST_PROCESSED_ID", "value": str(trigger_id)}) or \
           gh_api("POST",  var_path.replace("/LAST_PROCESSED_ID",""), {"name": "LAST_PROCESSED_ID", "value": str(trigger_id)})
@@ -84,12 +83,18 @@ jobs:
           msg_id = r.get("result", {}).get("message_id")
           print(f"Sent confirmation, msg_id={msg_id}")
 
-          # Trigger main workflow, passing msg_id
+          # Trigger main automation
           gh_api("POST", f"repos/{repo}/dispatches", {
               "event_type": "run-automation",
               "client_payload": {"tg_msg_id": str(msg_id or "")}
           })
           print("Main workflow triggered.")
+
+          # CRITICAL FIX: restart poll chain after triggering automation
+          print("Sleeping 60s then restarting poll chain...")
+          time.sleep(60)
+          gh_api("POST", f"repos/{repo}/dispatches", {"event_type": "next-poll"})
+          print("Poll chain restarted.")
           PYEOF
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
