@@ -1,239 +1,210 @@
-name: France Leads — Telegram Triggered
+name: Run Automation
 
 on:
-  schedule:
-    # Check every 2 minutes (GitHub minimum is 5 min, but we use 5 min here)
-    - cron: '*/5 * * * *'
+  repository_dispatch:
+    types: [run-automation]
   workflow_dispatch:
+    inputs:
+      tg_msg_id:
+        description: Telegram message ID to edit
+        required: false
 
 jobs:
-  check-and-run:
+  run:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-
     steps:
-      - name: Check Telegram for trigger message
-        id: check
-        run: |
-          python3 - <<'PYEOF'
-          import urllib.request, json, os, sys
-
-          token   = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat_id = os.environ["TELEGRAM_CHAT_ID"]
-
-          # Get last 10 messages
-          url = f"https://api.telegram.org/bot{token}/getUpdates?limit=10&allowed_updates=[\"message\"]"
-          try:
-              r = urllib.request.urlopen(url, timeout=10)
-              updates = json.loads(r.read()).get("result", [])
-          except Exception as e:
-              print(f"Telegram error: {e}")
-              sys.exit(0)
-
-          TRIGGERS = ["إذهب", "اذهب", "go", "GO", "start", "ابدأ", "ابدا"]
-
-          # Find most recent trigger message from our chat
-          trigger_update_id = None
-          for upd in reversed(updates):
-              msg = upd.get("message", {})
-              if str(msg.get("chat", {}).get("id", "")) != chat_id:
-                  continue
-              text = msg.get("text", "").strip()
-              if any(t.lower() in text.lower() for t in TRIGGERS):
-                  trigger_update_id = upd["update_id"]
-                  print(f"Found trigger: '{text}' (update_id={trigger_update_id})")
-                  break
-
-          if not trigger_update_id:
-              print("No trigger message found — skipping run")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("should_run=false\n")
-              sys.exit(0)
-
-          # Check if we already processed this update_id
-          last_id_str = os.environ.get("LAST_PROCESSED_ID", "0")
-          last_id = int(last_id_str) if last_id_str.isdigit() else 0
-
-          if trigger_update_id <= last_id:
-              print(f"Already processed update_id={trigger_update_id} — skipping")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("should_run=false\n")
-              sys.exit(0)
-
-          print(f"New trigger! update_id={trigger_update_id}")
-          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write("should_run=true\n")
-              f.write(f"trigger_update_id={trigger_update_id}\n")
-          PYEOF
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          LAST_PROCESSED_ID: ${{ vars.LAST_PROCESSED_ID }}
-
-      - name: Save processed update_id
-        if: steps.check.outputs.should_run == 'true'
-        run: |
-          curl -s -X PATCH \
-            -H "Authorization: token ${{ secrets.GH_CLASSIC_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/variables/LAST_PROCESSED_ID" \
-            -d "{\"name\":\"LAST_PROCESSED_ID\",\"value\":\"${{ steps.check.outputs.trigger_update_id }}\"}" \
-            -o /dev/null || \
-          curl -s -X POST \
-            -H "Authorization: token ${{ secrets.GH_CLASSIC_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
-            -d "{\"name\":\"LAST_PROCESSED_ID\",\"value\":\"${{ steps.check.outputs.trigger_update_id }}\"}" \
-            -o /dev/null
-
-      - name: Notify Telegram — started
-        if: steps.check.outputs.should_run == 'true'
-        run: |
-          python3 - <<'PYEOF'
-          import urllib.request, json, os
-          token = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat  = os.environ["TELEGRAM_CHAT_ID"]
-          msg   = "⏳ <b>France Leads démarré!</b>\n\nScraping Google Maps en cours...\n⏱ Résultats dans ~15 minutes."
-          data  = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML"}).encode()
-          urllib.request.urlopen(
-              urllib.request.Request(
-                  f"https://api.telegram.org/bot{token}/sendMessage",
-                  data, {"Content-Type": "application/json"}
-              ), timeout=10
-          )
-          PYEOF
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
       - name: Checkout code
-        if: steps.check.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Setup Python
-        if: steps.check.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install dependencies
-        if: steps.check.outputs.should_run == 'true'
         run: |
-          pip install playwright pytz
-          playwright install chromium --with-deps
+          pip install playwright pytz -q
+          playwright install chromium --with-deps -q 2>&1 | tail -3
 
       - name: Scrape Google Maps
-        if: steps.check.outputs.should_run == 'true'
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os
+
+          token  = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat   = os.environ["TELEGRAM_CHAT_ID"]
+          msg_id = os.environ.get("TG_MSG_ID", "")
+
+          def edit(text):
+              if not msg_id: return
+              body = {"chat_id": chat, "message_id": int(msg_id),
+                      "text": text, "parse_mode": "HTML"}
+              urllib.request.urlopen(urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/editMessageText",
+                  json.dumps(body).encode(), {"Content-Type": "application/json"}
+              ), timeout=10)
+
+          edit("⚙️ <b>بدأ العمل!</b>\n\n📍 <i>مراحل العمل:</i>\n🔍 Scraping Google Maps...")
+          PYEOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
+
+      - name: Run scraper
         run: python3 scraper/scrape_maps.py
 
       - name: Generate sites
-        if: steps.check.outputs.should_run == 'true'
         run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os
+          token  = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat   = os.environ["TELEGRAM_CHAT_ID"]
+          msg_id = os.environ.get("TG_MSG_ID", "")
+          if msg_id:
+              body = {"chat_id": chat, "message_id": int(msg_id),
+                      "text": "⚙️ <b>بدأ العمل!</b>\n\n📍 <i>مراحل العمل:</i>\n✅ Scraping terminé\n🏗️ Génération des sites web...",
+                      "parse_mode": "HTML"}
+              urllib.request.urlopen(urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/editMessageText",
+                  json.dumps(body).encode(), {"Content-Type": "application/json"}
+              ), timeout=10)
+          PYEOF
+
           python3 generator/template_site.py \
             scraper/today_leads.json \
             /tmp/sites \
             --github-username "${{ secrets.GH_USERNAME }}"
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
 
       - name: Deploy to GitHub Pages
-        if: steps.check.outputs.should_run == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
           GH_USER: ${{ secrets.GH_USERNAME }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
         run: |
           python3 - <<'PYEOF'
           import json, os, pathlib, subprocess, urllib.request
 
-          leads   = json.loads(pathlib.Path("scraper/today_leads.json").read_text(encoding="utf-8"))
-          token   = os.environ["GH_TOKEN"]
+          token    = os.environ["GH_TOKEN"]
           username = os.environ["GH_USER"]
-          results = []
+          tg_token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat     = os.environ["TELEGRAM_CHAT_ID"]
+          msg_id   = os.environ.get("TG_MSG_ID", "")
 
-          subprocess.run(["git", "config", "--global", "user.email", "bot@franceleads.fr"])
-          subprocess.run(["git", "config", "--global", "user.name", "France Leads Bot"])
+          def edit(text):
+              if not msg_id: return
+              body = {"chat_id": chat, "message_id": int(msg_id), "text": text, "parse_mode": "HTML"}
+              try:
+                  urllib.request.urlopen(urllib.request.Request(
+                      f"https://api.telegram.org/bot{tg_token}/editMessageText",
+                      json.dumps(body).encode(), {"Content-Type": "application/json"}
+                  ), timeout=10)
+              except: pass
+
+          edit("⚙️ <b>بدأ العمل!</b>\n\n📍 <i>مراحل العمل:</i>\n✅ Scraping terminé\n✅ Sites générés\n🚀 Déploiement GitHub Pages...")
+
+          leads = json.loads(pathlib.Path("scraper/today_leads.json").read_text(encoding="utf-8"))
+          subprocess.run(["git","config","--global","user.email","bot@franceleads.fr"])
+          subprocess.run(["git","config","--global","user.name","France Leads Bot"])
+          results = []
 
           for lead in leads:
               slug     = lead["slug"]
               site_dir = pathlib.Path(f"/tmp/sites/{slug}")
-              if not (site_dir / "index.html").exists():
+              if not (site_dir/"index.html").exists():
                   print(f"SKIP {slug}")
                   continue
 
               repo   = f"{slug}-site"
               remote = f"https://{token}@github.com/{username}/{repo}.git"
 
-              subprocess.run(["git", "init"], cwd=site_dir)
-              subprocess.run(["git", "add", "-A"], cwd=site_dir)
-              subprocess.run(["git", "commit", "-m", f"feat: {lead['name']}"], cwd=site_dir)
-              subprocess.run(["git", "remote", "add", "origin", remote], cwd=site_dir)
+              subprocess.run(["git","init"], cwd=site_dir)
+              subprocess.run(["git","add","-A"], cwd=site_dir)
+              subprocess.run(["git","commit","-m",f"feat: {lead['name']}"], cwd=site_dir)
+              subprocess.run(["git","remote","add","origin",remote], cwd=site_dir)
 
-              # Create repo if not exists
-              api = "https://api.github.com/user/repos"
               try:
-                  urllib.request.urlopen(urllib.request.Request(api,
-                      json.dumps({"name": repo, "private": False}).encode(),
-                      {"Authorization": f"token {token}", "Content-Type": "application/json",
-                       "Accept": "application/vnd.github.v3+json"}), timeout=15)
+                  urllib.request.urlopen(urllib.request.Request(
+                      "https://api.github.com/user/repos",
+                      json.dumps({"name":repo,"private":False}).encode(),
+                      {"Authorization":f"token {token}","Content-Type":"application/json",
+                       "Accept":"application/vnd.github.v3+json"}), timeout=15)
               except: pass
 
-              r = subprocess.run(["git", "push", "-u", "origin", "HEAD:main", "--force"], cwd=site_dir, capture_output=True)
+              r = subprocess.run(["git","push","-u","origin","HEAD:main","--force"],
+                                 cwd=site_dir, capture_output=True)
               if r.returncode != 0:
-                  print(f"Push failed for {slug}: {r.stderr.decode()[:200]}")
+                  print(f"Push failed: {r.stderr.decode()[:200]}")
                   continue
 
-              # Enable Pages
-              for method in ["POST", "PUT"]:
+              for method in ["POST","PUT"]:
                   try:
                       urllib.request.urlopen(urllib.request.Request(
                           f"https://api.github.com/repos/{username}/{repo}/pages",
-                          json.dumps({"source": {"branch": "main", "path": "/"}}).encode(),
-                          {"Authorization": f"token {token}", "Content-Type": "application/json",
-                           "Accept": "application/vnd.github.v3+json"}, method=method), timeout=10)
+                          json.dumps({"source":{"branch":"main","path":"/"}}).encode(),
+                          {"Authorization":f"token {token}","Content-Type":"application/json",
+                           "Accept":"application/vnd.github.v3+json"}, method=method), timeout=10)
                   except: pass
 
               url = f"https://{username}.github.io/{repo}"
               results.append({**lead, "url": url})
-              print(f"✅ {slug} → {url}")
+              print(f"Deployed: {url}")
 
           pathlib.Path("/tmp/results.json").write_text(json.dumps(results, ensure_ascii=False))
           PYEOF
 
       - name: Wait for GitHub Pages
-        if: steps.check.outputs.should_run == 'true'
         run: sleep 60
 
-      - name: Notify Telegram — results
-        if: steps.check.outputs.should_run == 'true'
+      - name: Send final results
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
         run: |
           python3 - <<'PYEOF'
           import json, urllib.request, os, pathlib
 
-          token = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat  = os.environ["TELEGRAM_CHAT_ID"]
+          token  = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat   = os.environ["TELEGRAM_CHAT_ID"]
+          msg_id = os.environ.get("TG_MSG_ID", "")
 
           rf = pathlib.Path("/tmp/results.json")
-          if not rf.exists():
-              msg = "⚠️ Aucun site déployé."
+          if not rf.exists() or not json.loads(rf.read_text()):
+              final = "⚠️ Aucun nouveau site déployé aujourd'hui."
           else:
               results = json.loads(rf.read_text())
-              if not results:
-                  msg = "ℹ️ Aucun nouveau lead trouvé aujourd'hui."
-              else:
-                  msg = f"✅ <b>{len(results)} site(s) déployé(s)!</b>\n\n"
-                  for r in results:
-                      msg += (
-                          f"🏢 <b>{r['name']}</b>\n"
-                          f"📂 {r.get('category','')}\n"
-                          f"📍 {r.get('address','')}\n"
-                          f"⭐ {r.get('rating','')}/5  📞 {r.get('phone','')}\n"
-                          f"🌐 <a href='{r['url']}'>{r['url']}</a>\n\n"
-                      )
+              final = f"✅ <b>اكتمل! {len(results)} موقع منشور</b>\n\n"
+              for r in results:
+                  final += (
+                      f"🏢 <b>{r['name']}</b>\n"
+                      f"📂 {r.get('category','')}  ⭐ {r.get('rating','')}/5\n"
+                      f"📍 {r.get('address','')}\n"
+                      f"📞 {r.get('phone','')}\n"
+                      f"🌐 <a href='{r['url']}'>{r['url']}</a>\n\n"
+                  )
+              final += "💡 <i>Admin: شغّل start_admin.bat على جهازك</i>"
 
-          data = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML"}).encode()
-          urllib.request.urlopen(urllib.request.Request(
-              f"https://api.telegram.org/bot{token}/sendMessage",
-              data, {"Content-Type": "application/json"}
-          ), timeout=10)
+          # Edit the original message with final result
+          if msg_id:
+              body = {"chat_id": chat, "message_id": int(msg_id),
+                      "text": final, "parse_mode": "HTML"}
+              urllib.request.urlopen(urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/editMessageText",
+                  json.dumps(body).encode(), {"Content-Type": "application/json"}
+              ), timeout=10)
+          else:
+              body = {"chat_id": chat, "text": final, "parse_mode": "HTML"}
+              urllib.request.urlopen(urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  json.dumps(body).encode(), {"Content-Type": "application/json"}
+              ), timeout=10)
+          print("Done.")
           PYEOF
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

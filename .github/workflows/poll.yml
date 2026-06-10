@@ -1,0 +1,98 @@
+name: Poll Telegram (every ~1 min)
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # fallback: GitHub minimum
+  repository_dispatch:
+    types: [next-poll]
+  workflow_dispatch:
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check Telegram & trigger if needed
+        run: |
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys, time
+
+          token   = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+          gh_tok  = os.environ["GH_TOKEN"]
+          repo    = os.environ["GITHUB_REPOSITORY"]
+          last_id = int(os.environ.get("LAST_PROCESSED_ID") or "0")
+
+          TRIGGERS = ["إذهب", "اذهب", "go", "GO", "start", "ابدأ", "ابدا"]
+
+          def tg(method, body):
+              url  = f"https://api.telegram.org/bot{token}/{method}"
+              data = json.dumps(body).encode()
+              req  = urllib.request.Request(url, data, {"Content-Type": "application/json"})
+              try:
+                  return json.loads(urllib.request.urlopen(req, timeout=10).read())
+              except Exception as e:
+                  print(f"TG error: {e}")
+                  return {}
+
+          def gh_api(method, path, body=None):
+              url  = f"https://api.github.com/{path}"
+              data = json.dumps(body).encode() if body else None
+              req  = urllib.request.Request(url, data, {
+                  "Authorization": f"token {gh_tok}",
+                  "Content-Type": "application/json",
+                  "Accept": "application/vnd.github.v3+json"
+              }, method=method)
+              try:
+                  return json.loads(urllib.request.urlopen(req, timeout=15).read())
+              except Exception as e:
+                  print(f"GH error: {e}")
+                  return {}
+
+          # Check Telegram
+          updates = tg("getUpdates", {"limit": 20, "allowed_updates": ["message"]}).get("result", [])
+          trigger_id = None
+          for upd in reversed(updates):
+              msg  = upd.get("message", {})
+              if str(msg.get("chat", {}).get("id", "")) != chat_id:
+                  continue
+              text = msg.get("text", "").strip()
+              if any(t.lower() in text.lower() for t in TRIGGERS):
+                  if upd["update_id"] > last_id:
+                      trigger_id = upd["update_id"]
+                      print(f"Trigger found: '{text}' (id={trigger_id})")
+                      break
+
+          if not trigger_id:
+              print(f"No new trigger (last_id={last_id}). Scheduling next poll...")
+              # Self-trigger after ~55 seconds
+              time.sleep(55)
+              gh_api("POST", f"repos/{repo}/dispatches", {"event_type": "next-poll"})
+              sys.exit(0)
+
+          # Save processed ID
+          var_path = f"repos/{repo}/actions/variables/LAST_PROCESSED_ID"
+          gh_api("PATCH", var_path, {"name": "LAST_PROCESSED_ID", "value": str(trigger_id)}) or \
+          gh_api("POST",  var_path.replace("/LAST_PROCESSED_ID",""), {"name": "LAST_PROCESSED_ID", "value": str(trigger_id)})
+
+          # Immediately reply on Telegram
+          r = tg("sendMessage", {
+              "chat_id": chat_id,
+              "text": "⚙️ <b>بدأ العمل!</b>\n\n📍 <i>مراحل العمل:</i>\n⏳ جاري الإعداد...",
+              "parse_mode": "HTML"
+          })
+          msg_id = r.get("result", {}).get("message_id")
+          print(f"Sent confirmation, msg_id={msg_id}")
+
+          # Trigger main workflow, passing msg_id
+          gh_api("POST", f"repos/{repo}/dispatches", {
+              "event_type": "run-automation",
+              "client_payload": {"tg_msg_id": str(msg_id or "")}
+          })
+          print("Main workflow triggered.")
+          PYEOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
+          LAST_PROCESSED_ID: ${{ vars.LAST_PROCESSED_ID }}
