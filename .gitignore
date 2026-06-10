@@ -1,0 +1,10 @@
+.env
+*.db
+node_modules/
+.next/
+sites/*/public-site/node_modules/
+sites/*/public-site/.next/
+sites/*/public-site/out/
+logs/
+__pycache__/
+*.pyc

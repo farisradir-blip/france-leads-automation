@@ -1,0 +1,161 @@
+name: France Leads — Scrape & Deploy
+
+on:
+  repository_dispatch:
+    types: [telegram-trigger]
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        run: |
+          pip install playwright pytz
+          playwright install chromium --with-deps
+
+      - name: Notify Telegram — started
+        run: |
+          python3 - <<'EOF'
+          import urllib.request, json, os
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat  = os.environ["TELEGRAM_CHAT_ID"]
+          url   = f"https://api.telegram.org/bot{token}/sendMessage"
+          msg   = "⏳ <b>France Leads démarré</b>\nScraping Google Maps en cours..."
+          data  = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML"}).encode()
+          urllib.request.urlopen(urllib.request.Request(url, data, {"Content-Type":"application/json"}), timeout=10)
+          EOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+
+      - name: Scrape Google Maps
+        run: python3 scraper/scrape_maps.py
+        working-directory: ${{ github.workspace }}
+
+      - name: Generate sites from template
+        run: |
+          python3 generator/template_site.py \
+            scraper/today_leads.json \
+            /tmp/generated_sites \
+            --github-username "${{ secrets.GITHUB_USERNAME }}"
+        working-directory: ${{ github.workspace }}
+
+      - name: Deploy each site to GitHub Pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
+          GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, pathlib, subprocess, urllib.request
+
+          leads = json.loads(pathlib.Path("scraper/today_leads.json").read_text(encoding="utf-8"))
+          token = os.environ["GITHUB_TOKEN"]
+          username = os.environ["GITHUB_USERNAME"]
+          results = []
+
+          for lead in leads:
+              slug = lead["slug"]
+              site_dir = pathlib.Path(f"/tmp/generated_sites/{slug}")
+              if not (site_dir / "index.html").exists():
+                  print(f"SKIP {slug} — no index.html")
+                  continue
+
+              repo = f"{slug}-site"
+              remote = f"https://{token}@github.com/{username}/{repo}.git"
+
+              # Init git
+              subprocess.run(["git", "init"], cwd=site_dir, check=True)
+              subprocess.run(["git", "config", "user.email", "bot@franceleads.fr"], cwd=site_dir)
+              subprocess.run(["git", "config", "user.name", "France Leads Bot"], cwd=site_dir)
+              subprocess.run(["git", "add", "-A"], cwd=site_dir, check=True)
+              subprocess.run(["git", "commit", "-m", f"feat: {lead['name']} — auto-generated"], cwd=site_dir, check=True)
+              subprocess.run(["git", "remote", "add", "origin", remote], cwd=site_dir)
+
+              # Create repo via API
+              api_url = "https://api.github.com/user/repos"
+              body = json.dumps({"name": repo, "private": False, "auto_init": False}).encode()
+              req = urllib.request.Request(api_url, body, {
+                  "Authorization": f"token {token}",
+                  "Content-Type": "application/json",
+                  "Accept": "application/vnd.github.v3+json"
+              })
+              try: urllib.request.urlopen(req, timeout=15)
+              except: pass  # repo may already exist
+
+              # Push
+              r = subprocess.run(["git", "push", "-u", "origin", "main", "--force"], cwd=site_dir, capture_output=True)
+              if r.returncode != 0:
+                  subprocess.run(["git", "push", "-u", "origin", "HEAD:main", "--force"], cwd=site_dir)
+
+              # Enable GitHub Pages
+              pages_url = f"https://api.github.com/repos/{username}/{repo}/pages"
+              for method in ["POST", "PUT"]:
+                  req2 = urllib.request.Request(pages_url,
+                      json.dumps({"source": {"branch": "main", "path": "/"}}).encode(),
+                      {"Authorization": f"token {token}", "Content-Type": "application/json",
+                       "Accept": "application/vnd.github.v3+json"}, method=method)
+                  try: urllib.request.urlopen(req2, timeout=10)
+                  except: pass
+
+              url = f"https://{username}.github.io/{repo}"
+              results.append({"name": lead["name"], "url": url, "slug": slug,
+                               "address": lead.get("address",""), "phone": lead.get("phone",""),
+                               "rating": lead.get("rating",""), "category": lead.get("category","")})
+              print(f"✅ Deployed: {url}")
+
+          # Save results for next step
+          pathlib.Path("/tmp/results.json").write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
+          EOF
+
+      - name: Wait for Pages to deploy
+        run: sleep 60
+
+      - name: Notify Telegram — results
+        run: |
+          python3 - <<'EOF'
+          import json, urllib.request, os, pathlib
+
+          token    = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat     = os.environ["TELEGRAM_CHAT_ID"]
+          username = os.environ["GITHUB_USERNAME"]
+
+          results_file = pathlib.Path("/tmp/results.json")
+          if not results_file.exists():
+              msg = "⚠️ Aucun site déployé aujourd'hui."
+          else:
+              results = json.loads(results_file.read_text())
+              if not results:
+                  msg = "ℹ️ Aucun nouveau lead trouvé aujourd'hui."
+              else:
+                  msg = f"✅ <b>{len(results)} site(s) déployé(s) aujourd'hui!</b>\n\n"
+                  for r in results:
+                      msg += (
+                          f"🏢 <b>{r['name']}</b>\n"
+                          f"📂 {r.get('category','')}\n"
+                          f"📍 {r.get('address','')}\n"
+                          f"⭐ {r.get('rating','')}/5\n"
+                          f"📞 {r.get('phone','')}\n"
+                          f"🌐 <a href='{r['url']}'>{r['url']}</a>\n\n"
+                      )
+                  msg += "💡 <i>Admin local: démarrez start_admin.bat sur votre PC</i>"
+
+          url  = f"https://api.telegram.org/bot{token}/sendMessage"
+          data = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": False}).encode()
+          urllib.request.urlopen(urllib.request.Request(url, data, {"Content-Type":"application/json"}), timeout=10)
+          print("Telegram notified.")
+          EOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GITHUB_USERNAME: ${{ secrets.GITHUB_USERNAME }}
