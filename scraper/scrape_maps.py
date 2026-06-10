@@ -14,10 +14,16 @@ from pathlib import Path
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
-from dotenv import load_dotenv
 from playwright.async_api import async_playwright
 
-load_dotenv(Path(__file__).parent.parent / ".env")
+# Load .env manually (works on Windows + GitHub Actions without python-dotenv)
+_env_file = Path(__file__).parent.parent / ".env"
+if _env_file.exists():
+    for _line in _env_file.read_text(encoding='utf-8').splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _k, _v = _line.split('=', 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
 
 SCRIPT_DIR = Path(__file__).parent
 LEADS_FILE = SCRIPT_DIR / "today_leads.json"
