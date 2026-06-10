@@ -1,161 +1,239 @@
-name: France Leads — Scrape & Deploy
+name: France Leads — Telegram Triggered
 
 on:
-  repository_dispatch:
-    types: [telegram-trigger]
+  schedule:
+    # Check every 2 minutes (GitHub minimum is 5 min, but we use 5 min here)
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
-  run:
+  check-and-run:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install Python dependencies
+      - name: Check Telegram for trigger message
+        id: check
         run: |
-          pip install playwright pytz
-          playwright install chromium --with-deps
+          python3 - <<'PYEOF'
+          import urllib.request, json, os, sys
+
+          token   = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+          # Get last 10 messages
+          url = f"https://api.telegram.org/bot{token}/getUpdates?limit=10&allowed_updates=[\"message\"]"
+          try:
+              r = urllib.request.urlopen(url, timeout=10)
+              updates = json.loads(r.read()).get("result", [])
+          except Exception as e:
+              print(f"Telegram error: {e}")
+              sys.exit(0)
+
+          TRIGGERS = ["إذهب", "اذهب", "go", "GO", "start", "ابدأ", "ابدا"]
+
+          # Find most recent trigger message from our chat
+          trigger_update_id = None
+          for upd in reversed(updates):
+              msg = upd.get("message", {})
+              if str(msg.get("chat", {}).get("id", "")) != chat_id:
+                  continue
+              text = msg.get("text", "").strip()
+              if any(t.lower() in text.lower() for t in TRIGGERS):
+                  trigger_update_id = upd["update_id"]
+                  print(f"Found trigger: '{text}' (update_id={trigger_update_id})")
+                  break
+
+          if not trigger_update_id:
+              print("No trigger message found — skipping run")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("should_run=false\n")
+              sys.exit(0)
+
+          # Check if we already processed this update_id
+          last_id_str = os.environ.get("LAST_PROCESSED_ID", "0")
+          last_id = int(last_id_str) if last_id_str.isdigit() else 0
+
+          if trigger_update_id <= last_id:
+              print(f"Already processed update_id={trigger_update_id} — skipping")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                  f.write("should_run=false\n")
+              sys.exit(0)
+
+          print(f"New trigger! update_id={trigger_update_id}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write("should_run=true\n")
+              f.write(f"trigger_update_id={trigger_update_id}\n")
+          PYEOF
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          LAST_PROCESSED_ID: ${{ vars.LAST_PROCESSED_ID }}
+
+      - name: Save processed update_id
+        if: steps.check.outputs.should_run == 'true'
+        run: |
+          curl -s -X PATCH \
+            -H "Authorization: token ${{ secrets.GH_CLASSIC_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables/LAST_PROCESSED_ID" \
+            -d "{\"name\":\"LAST_PROCESSED_ID\",\"value\":\"${{ steps.check.outputs.trigger_update_id }}\"}" \
+            -o /dev/null || \
+          curl -s -X POST \
+            -H "Authorization: token ${{ secrets.GH_CLASSIC_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables" \
+            -d "{\"name\":\"LAST_PROCESSED_ID\",\"value\":\"${{ steps.check.outputs.trigger_update_id }}\"}" \
+            -o /dev/null
 
       - name: Notify Telegram — started
+        if: steps.check.outputs.should_run == 'true'
         run: |
-          python3 - <<'EOF'
+          python3 - <<'PYEOF'
           import urllib.request, json, os
           token = os.environ["TELEGRAM_BOT_TOKEN"]
           chat  = os.environ["TELEGRAM_CHAT_ID"]
-          url   = f"https://api.telegram.org/bot{token}/sendMessage"
-          msg   = "⏳ <b>France Leads démarré</b>\nScraping Google Maps en cours..."
+          msg   = "⏳ <b>France Leads démarré!</b>\n\nScraping Google Maps en cours...\n⏱ Résultats dans ~15 minutes."
           data  = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML"}).encode()
-          urllib.request.urlopen(urllib.request.Request(url, data, {"Content-Type":"application/json"}), timeout=10)
-          EOF
+          urllib.request.urlopen(
+              urllib.request.Request(
+                  f"https://api.telegram.org/bot{token}/sendMessage",
+                  data, {"Content-Type": "application/json"}
+              ), timeout=10
+          )
+          PYEOF
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      - name: Scrape Google Maps
-        run: python3 scraper/scrape_maps.py
-        working-directory: ${{ github.workspace }}
+      - name: Checkout code
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/checkout@v4
 
-      - name: Generate sites from template
+      - name: Setup Python
+        if: steps.check.outputs.should_run == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.check.outputs.should_run == 'true'
+        run: |
+          pip install playwright pytz
+          playwright install chromium --with-deps
+
+      - name: Scrape Google Maps
+        if: steps.check.outputs.should_run == 'true'
+        run: python3 scraper/scrape_maps.py
+
+      - name: Generate sites
+        if: steps.check.outputs.should_run == 'true'
         run: |
           python3 generator/template_site.py \
             scraper/today_leads.json \
-            /tmp/generated_sites \
+            /tmp/sites \
             --github-username "${{ secrets.GH_USERNAME }}"
-        working-directory: ${{ github.workspace }}
 
-      - name: Deploy each site to GitHub Pages
+      - name: Deploy to GitHub Pages
+        if: steps.check.outputs.should_run == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
-          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
+          GH_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
+          GH_USER: ${{ secrets.GH_USERNAME }}
         run: |
-          python3 - <<'EOF'
+          python3 - <<'PYEOF'
           import json, os, pathlib, subprocess, urllib.request
 
-          leads = json.loads(pathlib.Path("scraper/today_leads.json").read_text(encoding="utf-8"))
-          token = os.environ["GITHUB_TOKEN"]
-          username = os.environ["GITHUB_USERNAME"]
+          leads   = json.loads(pathlib.Path("scraper/today_leads.json").read_text(encoding="utf-8"))
+          token   = os.environ["GH_TOKEN"]
+          username = os.environ["GH_USER"]
           results = []
 
+          subprocess.run(["git", "config", "--global", "user.email", "bot@franceleads.fr"])
+          subprocess.run(["git", "config", "--global", "user.name", "France Leads Bot"])
+
           for lead in leads:
-              slug = lead["slug"]
-              site_dir = pathlib.Path(f"/tmp/generated_sites/{slug}")
+              slug     = lead["slug"]
+              site_dir = pathlib.Path(f"/tmp/sites/{slug}")
               if not (site_dir / "index.html").exists():
-                  print(f"SKIP {slug} — no index.html")
+                  print(f"SKIP {slug}")
                   continue
 
-              repo = f"{slug}-site"
+              repo   = f"{slug}-site"
               remote = f"https://{token}@github.com/{username}/{repo}.git"
 
-              # Init git
-              subprocess.run(["git", "init"], cwd=site_dir, check=True)
-              subprocess.run(["git", "config", "user.email", "bot@franceleads.fr"], cwd=site_dir)
-              subprocess.run(["git", "config", "user.name", "France Leads Bot"], cwd=site_dir)
-              subprocess.run(["git", "add", "-A"], cwd=site_dir, check=True)
-              subprocess.run(["git", "commit", "-m", f"feat: {lead['name']} — auto-generated"], cwd=site_dir, check=True)
+              subprocess.run(["git", "init"], cwd=site_dir)
+              subprocess.run(["git", "add", "-A"], cwd=site_dir)
+              subprocess.run(["git", "commit", "-m", f"feat: {lead['name']}"], cwd=site_dir)
               subprocess.run(["git", "remote", "add", "origin", remote], cwd=site_dir)
 
-              # Create repo via API
-              api_url = "https://api.github.com/user/repos"
-              body = json.dumps({"name": repo, "private": False, "auto_init": False}).encode()
-              req = urllib.request.Request(api_url, body, {
-                  "Authorization": f"token {token}",
-                  "Content-Type": "application/json",
-                  "Accept": "application/vnd.github.v3+json"
-              })
-              try: urllib.request.urlopen(req, timeout=15)
-              except: pass  # repo may already exist
-
-              # Push
-              r = subprocess.run(["git", "push", "-u", "origin", "main", "--force"], cwd=site_dir, capture_output=True)
-              if r.returncode != 0:
-                  subprocess.run(["git", "push", "-u", "origin", "HEAD:main", "--force"], cwd=site_dir)
-
-              # Enable GitHub Pages
-              pages_url = f"https://api.github.com/repos/{username}/{repo}/pages"
-              for method in ["POST", "PUT"]:
-                  req2 = urllib.request.Request(pages_url,
-                      json.dumps({"source": {"branch": "main", "path": "/"}}).encode(),
+              # Create repo if not exists
+              api = "https://api.github.com/user/repos"
+              try:
+                  urllib.request.urlopen(urllib.request.Request(api,
+                      json.dumps({"name": repo, "private": False}).encode(),
                       {"Authorization": f"token {token}", "Content-Type": "application/json",
-                       "Accept": "application/vnd.github.v3+json"}, method=method)
-                  try: urllib.request.urlopen(req2, timeout=10)
+                       "Accept": "application/vnd.github.v3+json"}), timeout=15)
+              except: pass
+
+              r = subprocess.run(["git", "push", "-u", "origin", "HEAD:main", "--force"], cwd=site_dir, capture_output=True)
+              if r.returncode != 0:
+                  print(f"Push failed for {slug}: {r.stderr.decode()[:200]}")
+                  continue
+
+              # Enable Pages
+              for method in ["POST", "PUT"]:
+                  try:
+                      urllib.request.urlopen(urllib.request.Request(
+                          f"https://api.github.com/repos/{username}/{repo}/pages",
+                          json.dumps({"source": {"branch": "main", "path": "/"}}).encode(),
+                          {"Authorization": f"token {token}", "Content-Type": "application/json",
+                           "Accept": "application/vnd.github.v3+json"}, method=method), timeout=10)
                   except: pass
 
               url = f"https://{username}.github.io/{repo}"
-              results.append({"name": lead["name"], "url": url, "slug": slug,
-                               "address": lead.get("address",""), "phone": lead.get("phone",""),
-                               "rating": lead.get("rating",""), "category": lead.get("category","")})
-              print(f"✅ Deployed: {url}")
+              results.append({**lead, "url": url})
+              print(f"✅ {slug} → {url}")
 
-          # Save results for next step
-          pathlib.Path("/tmp/results.json").write_text(json.dumps(results, ensure_ascii=False), encoding="utf-8")
-          EOF
+          pathlib.Path("/tmp/results.json").write_text(json.dumps(results, ensure_ascii=False))
+          PYEOF
 
-      - name: Wait for Pages to deploy
+      - name: Wait for GitHub Pages
+        if: steps.check.outputs.should_run == 'true'
         run: sleep 60
 
       - name: Notify Telegram — results
+        if: steps.check.outputs.should_run == 'true'
         run: |
-          python3 - <<'EOF'
+          python3 - <<'PYEOF'
           import json, urllib.request, os, pathlib
 
-          token    = os.environ["TELEGRAM_BOT_TOKEN"]
-          chat     = os.environ["TELEGRAM_CHAT_ID"]
-          username = os.environ["GITHUB_USERNAME"]
+          token = os.environ["TELEGRAM_BOT_TOKEN"]
+          chat  = os.environ["TELEGRAM_CHAT_ID"]
 
-          results_file = pathlib.Path("/tmp/results.json")
-          if not results_file.exists():
-              msg = "⚠️ Aucun site déployé aujourd'hui."
+          rf = pathlib.Path("/tmp/results.json")
+          if not rf.exists():
+              msg = "⚠️ Aucun site déployé."
           else:
-              results = json.loads(results_file.read_text())
+              results = json.loads(rf.read_text())
               if not results:
                   msg = "ℹ️ Aucun nouveau lead trouvé aujourd'hui."
               else:
-                  msg = f"✅ <b>{len(results)} site(s) déployé(s) aujourd'hui!</b>\n\n"
+                  msg = f"✅ <b>{len(results)} site(s) déployé(s)!</b>\n\n"
                   for r in results:
                       msg += (
                           f"🏢 <b>{r['name']}</b>\n"
                           f"📂 {r.get('category','')}\n"
                           f"📍 {r.get('address','')}\n"
-                          f"⭐ {r.get('rating','')}/5\n"
-                          f"📞 {r.get('phone','')}\n"
+                          f"⭐ {r.get('rating','')}/5  📞 {r.get('phone','')}\n"
                           f"🌐 <a href='{r['url']}'>{r['url']}</a>\n\n"
                       )
-                  msg += "💡 <i>Admin local: démarrez start_admin.bat sur votre PC</i>"
 
-          url  = f"https://api.telegram.org/bot{token}/sendMessage"
-          data = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML", "disable_web_page_preview": False}).encode()
-          urllib.request.urlopen(urllib.request.Request(url, data, {"Content-Type":"application/json"}), timeout=10)
-          print("Telegram notified.")
-          EOF
+          data = json.dumps({"chat_id": chat, "text": msg, "parse_mode": "HTML"}).encode()
+          urllib.request.urlopen(urllib.request.Request(
+              f"https://api.telegram.org/bot{token}/sendMessage",
+              data, {"Content-Type": "application/json"}
+          ), timeout=10)
+          PYEOF
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GITHUB_USERNAME: ${{ secrets.GH_USERNAME }}
