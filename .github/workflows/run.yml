@@ -53,7 +53,24 @@ jobs:
       - name: Run scraper
         run: python3 scraper/scrape_maps.py
 
+      - name: Check leads count
+        id: check_leads
+        run: |
+          if [ -f scraper/today_leads.json ]; then
+            COUNT=$(python3 -c "import json; print(len(json.load(open('scraper/today_leads.json'))))")
+            echo "count=$COUNT" >> $GITHUB_OUTPUT
+            if [ "$COUNT" -gt "0" ]; then
+              echo "has_leads=true" >> $GITHUB_OUTPUT
+            else
+              echo "has_leads=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "has_leads=false" >> $GITHUB_OUTPUT
+            echo "count=0" >> $GITHUB_OUTPUT
+          fi
+
       - name: Update progress — Generating
+        if: steps.check_leads.outputs.has_leads == 'true'
         run: |
           python3 - <<'PYEOF'
           import urllib.request, json, os, pathlib
@@ -79,6 +96,7 @@ jobs:
           TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
 
       - name: Generate sites
+        if: steps.check_leads.outputs.has_leads == 'true'
         run: |
           python3 generator/template_site.py \
             scraper/today_leads.json \
@@ -86,6 +104,7 @@ jobs:
             --github-username "${{ secrets.GH_USERNAME }}"
 
       - name: Update progress — Deploying
+        if: steps.check_leads.outputs.has_leads == 'true'
         run: |
           python3 - <<'PYEOF'
           import urllib.request, json, os, pathlib
@@ -111,6 +130,7 @@ jobs:
           TG_MSG_ID: ${{ github.event.client_payload.tg_msg_id || inputs.tg_msg_id }}
 
       - name: Deploy to GitHub Pages
+        if: steps.check_leads.outputs.has_leads == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_CLASSIC_TOKEN }}
           GH_USER: ${{ secrets.GH_USERNAME }}
@@ -165,9 +185,11 @@ jobs:
           PYEOF
 
       - name: Wait for GitHub Pages
+        if: steps.check_leads.outputs.has_leads == 'true'
         run: sleep 60
 
       - name: Send final result & clean up progress message
+        if: always()
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
