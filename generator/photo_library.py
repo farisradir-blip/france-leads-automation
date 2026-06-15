@@ -94,7 +94,7 @@ def _pexels_search(query: str, count: int, api_key: str, page: int = 1) -> list[
     """Search Pexels and return CDN photo URLs (landscape, high quality)."""
     q = urllib.parse.quote(query)
     url = f"https://api.pexels.com/v1/search?query={q}&per_page={min(count, 80)}&page={page}&orientation=landscape&size=large"
-    req = urllib.request.Request(url, headers={"Authorization": api_key})
+    req = urllib.request.Request(url, headers={"Authorization": api_key, "User-Agent": "Mozilla/5.0", "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read())
@@ -125,7 +125,7 @@ def build_library(api_key: str, verbose: bool = True) -> dict:
             urls = []
             for query, count in queries:
                 if verbose:
-                    print(f"  {section}: '{query}' → ", end="", flush=True)
+                    print(f"  {section}: '{query}' -> ", end="", flush=True)
                 fetched = _pexels_search(query, count, api_key)
                 # deduplicate within section
                 for u in fetched:
