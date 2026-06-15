@@ -258,7 +258,8 @@ def uimg(pid, w=1200, h=800, q=82):
     return f"https://images.unsplash.com/{pid}?w={w}&h={h}&q={q}&auto=format&fit=crop"
 
 def img_tag(pid, w, h, alt, extra_attrs=""):
-    src = uimg(pid, w, h)
+    # Accepts Unsplash photo IDs (photo-xxx) or full URLs (Higgsfield CDN)
+    src = pid if pid.startswith("http") else uimg(pid, w, h)
     fb  = uimg(FALLBACK_PHOTO, w, h)
     err = f"this.onerror=null;this.src='{fb}'"
     return f'<img src="{src}" alt="{alt}" loading="lazy" onerror="{err}"{extra_attrs}>'
@@ -1126,7 +1127,7 @@ def validate_site(output_dir, name):
 # ══════════════════════════════════════════════════════════════════════════════
 # GENERATE FULL SITE
 # ══════════════════════════════════════════════════════════════════════════════
-def generate_site(lead, output_dir, github_url=""):
+def generate_site(lead, output_dir, github_url="", photos_override=None):
     name     = lead.get("name","")
     category = lead.get("category","")
     address  = lead.get("address","")
@@ -1141,7 +1142,7 @@ def generate_site(lead, output_dir, github_url=""):
     initial  = name[0].upper() if name else "A"
 
     t  = get_theme(category)
-    ph = get_photos(category)
+    ph = photos_override if photos_override else get_photos(category)
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -1179,6 +1180,8 @@ def main():
     ap.add_argument("leads_file")
     ap.add_argument("output_dir")
     ap.add_argument("--github-username", default="")
+    ap.add_argument("--higgsfield", action="store_true", help="Generate AI photos using Higgsfield CLI")
+    ap.add_argument("--higgsfield-model", default="flux_2", help="Higgsfield model (default: flux_2 = 1 credit/image)")
     args = ap.parse_args()
 
     leads = json.loads(pathlib.Path(args.leads_file).read_text(encoding="utf-8"))
@@ -1194,7 +1197,20 @@ def main():
         gh = (f"https://{args.github_username}.github.io/{slug}-site"
               if args.github_username and slug else "")
         print(f"\n[{total+1}] Generating: {name} ({slug})")
-        ok = generate_site(lead, out/slug, gh)
+        photos_override = None
+        if args.higgsfield:
+            try:
+                import sys as _sys; _sys.path.insert(0, str(pathlib.Path(__file__).parent))
+                import higgsfield_photos as _hfp
+                cat        = lead.get("category", "default")
+                addr_parts = [x.strip() for x in lead.get("address","").split(",")]
+                city_name  = addr_parts[-2] if len(addr_parts) >= 2 else "France"
+                print(f"  Higgsfield: generating AI photos ({args.higgsfield_model})...")
+                photos_override = _hfp.generate_photos(cat, city_name, name, args.higgsfield_model)
+                print(f"  AI photos generated")
+            except Exception as _e:
+                print(f"  Higgsfield failed ({_e}), falling back to Unsplash")
+        ok = generate_site(lead, out/slug, gh, photos_override=photos_override)
         total += 1
         if ok: ok_count += 1
 
