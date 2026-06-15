@@ -7,6 +7,11 @@ WebGL1 domain-warping shader, GSAP 3.12 + ScrollTrigger, Lenis smooth scroll.
 Quality validator runs after every generation.
 """
 import sys, io, json, pathlib, argparse, re
+try:
+    from photo_library import load_library, get_photos_for_site as _lib_photos
+    _PHOTO_LIB = load_library()
+except Exception:
+    _PHOTO_LIB = {}
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 
 # ── VERIFIED UNSPLASH PHOTO IDs (HTTP-200 confirmed) ──────────────────────────
@@ -1142,7 +1147,14 @@ def generate_site(lead, output_dir, github_url="", photos_override=None):
     initial  = name[0].upper() if name else "A"
 
     t  = get_theme(category)
-    ph = photos_override if photos_override else get_photos(category)
+    # Priority: Higgsfield override > Pexels library > built-in Unsplash
+    if photos_override:
+        ph = photos_override
+    elif _PHOTO_LIB:
+        _lib = _lib_photos(category, slug, _PHOTO_LIB)
+        ph = _lib if _lib else get_photos(category)
+    else:
+        ph = get_photos(category)
     out = pathlib.Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
 

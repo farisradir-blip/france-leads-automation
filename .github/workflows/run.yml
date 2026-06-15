@@ -97,7 +97,13 @@ jobs:
 
       - name: Generate sites
         if: steps.check_leads.outputs.has_leads == 'true'
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
         run: |
+          if [ -n "$PEXELS_API_KEY" ] && [ ! -f generator/photo_library.json ]; then
+            echo "Building Pexels photo library..."
+            python3 generator/photo_library.py --build --pexels-key "$PEXELS_API_KEY"
+          fi
           python3 generator/template_site.py \
             scraper/today_leads.json \
             /tmp/sites \
