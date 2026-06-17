@@ -6,7 +6,7 @@ All Unsplash photo IDs are HTTP-200 verified. onerror fallback on every image.
 WebGL1 domain-warping shader, GSAP 3.12 + ScrollTrigger, Lenis smooth scroll.
 Quality validator runs after every generation.
 """
-import sys, io, json, pathlib, argparse, re
+import sys, io, json, pathlib, argparse, re, hashlib
 try:
     from photo_library import load_library, get_photos_for_site as _lib_photos
     _PHOTO_LIB = load_library()
@@ -244,6 +244,115 @@ THEMES = {
     },
 }
 
+
+# -- THEME VARIANTS (4 per category, slug picks one deterministically) --------
+THEME_VARIANTS = {
+    "boulangerie": [
+        {"bg":"#0A0905","s1":"#131008","s2":"#1C1810","acc":"#D4A843","acc2":"#8B6A1F","acc3":"#F0D080",
+         "txt":"#F2ECE0","muted":"#8A7A62","border":"rgba(212,168,67,.13)","fd":"Cormorant Garamond",
+         "pc":"212,168,67","sh_c1":"0.55,0.32,0.04","sh_c2":"0.20,0.11,0.01","sh_c3":"0.72,0.50,0.10",
+         "tag":"Artisan Boulanger","city_tag":"Boulangerie de Quartier",
+         "tagline":"L'art du pain depuis des générations",
+         "philosophy":"Chaque levain est une promesse.\nChaque fournée, un hommage."},
+        {"bg":"#0C0805","s1":"#16100A","s2":"#201610","acc":"#C8733A","acc2":"#8B4A1F","acc3":"#E8A070",
+         "txt":"#F2EDE5","muted":"#8A7268","border":"rgba(200,115,58,.13)","fd":"Playfair Display",
+         "pc":"200,115,58","sh_c1":"0.52,0.22,0.04","sh_c2":"0.22,0.08,0.01","sh_c3":"0.68,0.32,0.08",
+         "tag":"Four Artisanal","city_tag":"Boulangerie Traditionnelle",
+         "tagline":"Le pain comme autrefois, fait avec amour",
+         "philosophy":"La farine, l'eau, le sel et le temps.\nC'est tout. C'est tout nous."},
+        {"bg":"#060A07","s1":"#0C1210","s2":"#121A15","acc":"#6B9B5A","acc2":"#3D6B30","acc3":"#90C278",
+         "txt":"#EBF2E8","muted":"#728070","border":"rgba(107,155,90,.13)","fd":"EB Garamond",
+         "pc":"107,155,90","sh_c1":"0.18,0.38,0.10","sh_c2":"0.06,0.15,0.04","sh_c3":"0.28,0.52,0.16",
+         "tag":"Pain Naturel","city_tag":"Boulangerie Bio & Artisanale",
+         "tagline":"Des ingredients simples, un savoir-faire exceptionnel",
+         "philosophy":"La nature donne. L'artisan transforme.\nNous, nous partageons."},
+        {"bg":"#0A0908","s1":"#141210","s2":"#1C1A18","acc":"#B09070","acc2":"#7A6248","acc3":"#CEB898",
+         "txt":"#F0EAE0","muted":"#8A7E72","border":"rgba(176,144,112,.13)","fd":"Libre Baskerville",
+         "pc":"176,144,112","sh_c1":"0.45,0.35,0.22","sh_c2":"0.18,0.14,0.08","sh_c3":"0.60,0.48,0.32",
+         "tag":"Maitre Boulanger","city_tag":"Boulangerie Gastronomique",
+         "tagline":"Le luxe du fait-maison, accessible chaque matin",
+         "philosophy":"Petrir, faconner, cuire.\nUn metier. Une vocation. Un art."},
+    ],
+    "patisserie": [
+        {"bg":"#09080C","s1":"#110F16","s2":"#181420","acc":"#C87DC8","acc2":"#8B4A8B","acc3":"#E8B8E8",
+         "txt":"#F5F0F8","muted":"#8A7888","border":"rgba(200,125,200,.13)","fd":"Playfair Display",
+         "pc":"200,125,200","sh_c1":"0.45,0.18,0.45","sh_c2":"0.15,0.06,0.22","sh_c3":"0.62,0.28,0.62",
+         "tag":"Maitre Patissier","city_tag":"Patisserie d'Excellence",
+         "tagline":"Creations sucrees d'exception, elevees au rang d'art",
+         "philosophy":"Le sucre est notre matiere.\nLa beaute, notre obsession."},
+        {"bg":"#0C0809","s1":"#160F11","s2":"#1E1518","acc":"#D4829A","acc2":"#9B4A62","acc3":"#EEB8C8",
+         "txt":"#F8F0F2","muted":"#8A7278","border":"rgba(212,130,154,.13)","fd":"Cormorant Garamond",
+         "pc":"212,130,154","sh_c1":"0.52,0.18,0.30","sh_c2":"0.20,0.06,0.12","sh_c3":"0.68,0.28,0.44",
+         "tag":"Creatrice de Douceurs","city_tag":"Patisserie Romantique",
+         "tagline":"Des saveurs qui font battre le coeur",
+         "philosophy":"Chaque gateau est une declaration.\nChaque bouchee, une emotion."},
+        {"bg":"#0A0809","s1":"#130F12","s2":"#1A141A","acc":"#9B78C0","acc2":"#6A4A8B","acc3":"#C0A0E0",
+         "txt":"#F2EEF8","muted":"#827A8A","border":"rgba(155,120,192,.13)","fd":"EB Garamond",
+         "pc":"155,120,192","sh_c1":"0.32,0.18,0.52","sh_c2":"0.12,0.06,0.22","sh_c3":"0.48,0.28,0.70",
+         "tag":"Artisan Chocolatier","city_tag":"Atelier de Patisserie",
+         "tagline":"L'alchimie du sucre et de la passion",
+         "philosophy":"Transformer le beurre en magie.\nC'est notre quotidien."},
+        {"bg":"#0C0B09","s1":"#161410","s2":"#1E1C16","acc":"#C8A86A","acc2":"#8B7038","acc3":"#E8C890",
+         "txt":"#F5F0E8","muted":"#8A8070","border":"rgba(200,168,106,.13)","fd":"Libre Baskerville",
+         "pc":"200,168,106","sh_c1":"0.48,0.38,0.14","sh_c2":"0.18,0.14,0.04","sh_c3":"0.65,0.52,0.20",
+         "tag":"Confiseur d'Exception","city_tag":"Patisserie Gastronomique",
+         "tagline":"Le raffinement a la francaise, sublimé",
+         "philosophy":"Le luxe nait du detail.\nNous aimons les details."},
+    ],
+    "restaurant": [
+        {"bg":"#07080C","s1":"#0D0F15","s2":"#13151E","acc":"#B89060","acc2":"#7A5A30","acc3":"#D4B080",
+         "txt":"#EDE8DC","muted":"#8A7A65","border":"rgba(184,144,96,.13)","fd":"Cormorant Garamond",
+         "pc":"184,144,96","sh_c1":"0.42,0.28,0.08","sh_c2":"0.14,0.09,0.02","sh_c3":"0.58,0.40,0.14",
+         "tag":"Restaurant Gastronomique","city_tag":"Table d'Exception",
+         "tagline":"Une experience culinaire qui transcende le repas",
+         "philosophy":"Chaque assiette est un voyage.\nChaque service, une histoire."},
+        {"bg":"#0A0607","s1":"#140C0E","s2":"#1C1014","acc":"#A83850","acc2":"#6B1E30","acc3":"#CC5870",
+         "txt":"#F2EAE8","muted":"#8A6872","border":"rgba(168,56,80,.13)","fd":"Playfair Display",
+         "pc":"168,56,80","sh_c1":"0.42,0.08,0.14","sh_c2":"0.18,0.02,0.06","sh_c3":"0.58,0.14,0.22",
+         "tag":"Bistrot Gastronomique","city_tag":"Cave & Cuisine",
+         "tagline":"Le vin et la table, une histoire d'amour francaise",
+         "philosophy":"Un bon plat sans bon vin\nest comme un jour sans soleil."},
+        {"bg":"#060A07","s1":"#0C1410","s2":"#101C16","acc":"#3D8B5A","acc2":"#1E5A35","acc3":"#60B080",
+         "txt":"#E8F2EC","muted":"#688078","border":"rgba(61,139,90,.13)","fd":"EB Garamond",
+         "pc":"61,139,90","sh_c1":"0.10,0.35,0.18","sh_c2":"0.04,0.15,0.08","sh_c3":"0.16,0.52,0.28",
+         "tag":"Restaurant de Terroir","city_tag":"Cuisine du Marche",
+         "tagline":"Du producteur a l'assiette, avec amour et respect",
+         "philosophy":"La terre nourrit.\nLe chef sublime. Vous savourez."},
+        {"bg":"#060810","s1":"#0C1018","s2":"#101820","acc":"#4A7AB5","acc2":"#2A4A7A","acc3":"#70A0D8",
+         "txt":"#E8EEFC","muted":"#6878A0","border":"rgba(74,122,181,.13)","fd":"Libre Baskerville",
+         "pc":"74,122,181","sh_c1":"0.08,0.18,0.48","sh_c2":"0.02,0.06,0.22","sh_c3":"0.14,0.30,0.65",
+         "tag":"Grande Table","city_tag":"Restaurant Etoile",
+         "tagline":"L'excellence francaise dans toute sa splendeur",
+         "philosophy":"La perfection est notre seuil minimum.\nL'excellence, notre signature."},
+    ],
+    "cafe": [
+        {"bg":"#090807","s1":"#120F0C","s2":"#181410","acc":"#A07848","acc2":"#6B4E28","acc3":"#C09860",
+         "txt":"#EDE8E0","muted":"#8A7868","border":"rgba(160,120,72,.13)","fd":"Cormorant Garamond",
+         "pc":"160,120,72","sh_c1":"0.38,0.22,0.08","sh_c2":"0.14,0.08,0.02","sh_c3":"0.52,0.32,0.12",
+         "tag":"Cafe de Specialite","city_tag":"Cafe Artisanal",
+         "tagline":"L'heure du cafe elevee au rang de rituel",
+         "philosophy":"Un grain. Un terroir.\nUn instant suspendu."},
+        {"bg":"#0C0806","s1":"#180E0A","s2":"#201410","acc":"#C45C3A","acc2":"#8B3A1E","acc3":"#E08060",
+         "txt":"#F2EAE5","muted":"#8A6860","border":"rgba(196,92,58,.13)","fd":"Playfair Display",
+         "pc":"196,92,58","sh_c1":"0.50,0.18,0.08","sh_c2":"0.22,0.06,0.02","sh_c3":"0.65,0.28,0.12",
+         "tag":"Cafe & Brunch","city_tag":"Bruncherie du Quartier",
+         "tagline":"Le cafe qui reveille, le brunch qui inspire",
+         "philosophy":"Le matin commence ici.\nLe reste suit naturellement."},
+        {"bg":"#060B0B","s1":"#0C1616","s2":"#101E1E","acc":"#3D8888","acc2":"#1E5858","acc3":"#60AAAA",
+         "txt":"#E8F2F2","muted":"#688080","border":"rgba(61,136,136,.13)","fd":"EB Garamond",
+         "pc":"61,136,136","sh_c1":"0.08,0.35,0.35","sh_c2":"0.02,0.14,0.14","sh_c3":"0.12,0.50,0.50",
+         "tag":"Cafe Concept","city_tag":"Espace Cafe & Culture",
+         "tagline":"Un espace ou le cafe devient conversation",
+         "philosophy":"Le cafe rassemble.\nLes idees s'epanouissent ici."},
+        {"bg":"#060908","s1":"#0C1410","s2":"#101C16","acc":"#4A8A68","acc2":"#2A5A42","acc3":"#70AA88",
+         "txt":"#E8F0EC","muted":"#688078","border":"rgba(74,138,104,.13)","fd":"Libre Baskerville",
+         "pc":"74,138,104","sh_c1":"0.10,0.35,0.22","sh_c2":"0.04,0.15,0.08","sh_c3":"0.16,0.50,0.32",
+         "tag":"Cafe Eco-Responsable","city_tag":"Cafe Durable & Local",
+         "tagline":"Cafe de qualite, conscience en eveil",
+         "philosophy":"Chaque tasse est un choix.\nNous choisissons l'essentiel."},
+    ],
+}
+
 # ── HELPERS ────────────────────────────────────────────────────────────────────
 def get_theme_key(cat):
     c = (cat or "").lower()
@@ -253,8 +362,14 @@ def get_theme_key(cat):
             return k
     return "default"
 
-def get_theme(cat):
-    return THEMES[get_theme_key(cat)]
+def get_theme(cat, slug=""):
+    base = THEMES[get_theme_key(cat)].copy()
+    key  = get_theme_key(cat)
+    variants = THEME_VARIANTS.get(key)
+    if variants and slug:
+        idx = int(hashlib.md5(slug.encode()).hexdigest(), 16) % len(variants)
+        base.update(variants[idx])
+    return base
 
 def get_photos(cat):
     return PHOTOS[get_theme_key(cat)]
@@ -1146,7 +1261,7 @@ def generate_site(lead, output_dir, github_url="", photos_override=None):
     city     = parts[-2] if len(parts)>=2 else (parts[-1] if parts else "France")
     initial  = name[0].upper() if name else "A"
 
-    t  = get_theme(category)
+    t  = get_theme(category, slug)
     # Priority: Higgsfield override > Pexels library > built-in Unsplash
     if photos_override:
         ph = photos_override
