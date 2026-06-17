@@ -30,18 +30,83 @@ LEADS_FILE = SCRIPT_DIR / "today_leads.json"
 PROCESSED_FILE = SCRIPT_DIR / "processed_urls.json"
 
 SEARCH_QUERIES = [
-    "restaurant Paris France",
-    "café Lyon France",
-    "boulangerie Marseille France",
-    "pizzeria Toulouse France",
-    "brasserie Bordeaux France",
-    "kebab Nantes France",
-    "crêperie Rennes France",
-    "salon de thé Nice France",
-    "traiteur Strasbourg France",
-    "restaurant Lille France",
-    "café Montpellier France",
-    "boulangerie Grenoble France",
+    # Small cities — less digital presence, better leads
+    "boulangerie Albi France",
+    "restaurant Auch France",
+    "café Cahors France",
+    "boulangerie Périgueux France",
+    "restaurant Millau France",
+    "café Figeac France",
+    "boulangerie Rodez France",
+    "restaurant Carcassonne France",
+    "café Béziers France",
+    "boulangerie Sète France",
+    "restaurant Aurillac France",
+    "café Tulle France",
+    "boulangerie Brive-la-Gaillarde France",
+    "restaurant Guéret France",
+    "café Saintes France",
+    "boulangerie Angoulême France",
+    "restaurant Dax France",
+    "café Rochefort France",
+    "boulangerie Agen France",
+    "restaurant Roanne France",
+    "café Vichy France",
+    "boulangerie Privas France",
+    "restaurant Aubenas France",
+    "café Romans-sur-Isère France",
+    "boulangerie Mâcon France",
+    "restaurant Bourg-en-Bresse France",
+    "café Vesoul France",
+    "boulangerie Lons-le-Saunier France",
+    "restaurant Pontarlier France",
+    "café Belfort France",
+    "boulangerie Verdun France",
+    "restaurant Bar-le-Duc France",
+    "café Épinal France",
+    "boulangerie Saint-Dié-des-Vosges France",
+    "restaurant Charleville-Mézières France",
+    "café Sedan France",
+    "boulangerie Châlons-en-Champagne France",
+    "restaurant Sens France",
+    "café Auxerre France",
+    "boulangerie Autun France",
+    "restaurant Laval France",
+    "café Saumur France",
+    "boulangerie Cholet France",
+    "restaurant Quimper France",
+    "café Lorient France",
+    "boulangerie Vannes France",
+    "restaurant Saint-Brieuc France",
+    "café Lannion France",
+    "boulangerie Alençon France",
+    "restaurant Évreux France",
+    "café Lisieux France",
+    "boulangerie Arras France",
+    "restaurant Douai France",
+    "café Lens France",
+    "boulangerie Cambrai France",
+    "restaurant Soissons France",
+    "café Laon France",
+    "boulangerie Blois France",
+    "restaurant Chartres France",
+    "café Bourges France",
+    "boulangerie Châteauroux France",
+    "restaurant Arles France",
+    "café Gap France",
+    "boulangerie Digne-les-Bains France",
+    "restaurant Draguignan France",
+    "café Mende France",
+    # Medium cities as fallback
+    "boulangerie Limoges France",
+    "restaurant Troyes France",
+    "café Valence France",
+    "boulangerie Colmar France",
+    "restaurant Mulhouse France",
+    "café Pau France",
+    "boulangerie Nîmes France",
+    "restaurant Avignon France",
+    "café Annecy France",
 ]
 
 
@@ -96,7 +161,7 @@ def save_processed_urls(urls: set):
         json.dump(list(urls), f, ensure_ascii=False, indent=2)
 
 
-async def scrape_query(page, query: str, processed_urls: set, max_results: int = 10) -> list:
+async def scrape_query(page, query: str, processed_urls: set, max_results: int = 15) -> list:
     """Scrape Google Maps for a given query and return businesses without websites."""
     results = []
     url = f"https://www.google.com/maps/search/{query.replace(' ', '+')}/"
@@ -117,7 +182,7 @@ async def scrape_query(page, query: str, processed_urls: set, max_results: int =
 
         # Scroll to load more results
         results_panel = page.locator('[role="feed"]')
-        for _ in range(5):
+        for _ in range(8):
             try:
                 await results_panel.evaluate("el => el.scrollTop += 600")
                 await asyncio.sleep(1.5)
@@ -195,7 +260,7 @@ async def scrape_query(page, query: str, processed_urls: set, max_results: int =
                 if review_count > 50000:
                     review_count = review_count % 10000 or 500
 
-                if review_count < 15:
+                if review_count < 10:
                     print(f"  Skip (few reviews {review_count}): {name}")
                     processed_urls.add(maps_url)
                     continue

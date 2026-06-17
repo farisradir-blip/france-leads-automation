@@ -7,6 +7,10 @@ on:
     types: [next-poll]
   workflow_dispatch:
 
+concurrency:
+  group: poll-chain
+  cancel-in-progress: true
+
 jobs:
   poll:
     runs-on: ubuntu-latest

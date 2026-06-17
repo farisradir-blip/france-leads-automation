@@ -9,6 +9,10 @@ on:
         description: Telegram message ID to edit
         required: false
 
+concurrency:
+  group: run-automation
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
